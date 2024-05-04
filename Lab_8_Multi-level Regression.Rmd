@@ -698,3 +698,115 @@ MCMCplot(zc.rancoef1, params = "beta")
 
 --------------------------------------------------------------------------------
 # Model Checking
+
+
+```{r,message=FALSE, warning=FALSE}
+n.input.pred <- seq(min(N2OEmission$n.input), max(N2OEmission$n.input), 10)
+
+
+data = list(
+  #log.emission = log(yi)
+  log.emission = log(N2OEmission$emission),
+  #log.n.input.centered = log(xi)
+  log.n.input.centered = log(N2OEmission$n.input) - mean(log(N2OEmission$n.input)),
+  log.n.input.centered.pred = log(n.input.pred) - mean(log(N2OEmission$n.input)))
+
+inits = list(
+  list(alpha = 0, beta = .5, sigma = 50),
+  list(alpha = 1, beta = 1.5, sigma = 10),
+  list(alpha = 2, beta = .75, sigma = 20))
+
+```
+
+```{r,message=FALSE, warning=FALSE}
+{
+  sink("PooledJAGS.R") # This is the file name for the jags code
+  cat("
+    
+    model{
+
+ # priors
+  alpha ~ dnorm(0,.0001)
+  beta ~ dnorm(0,.0001)
+  sigma ~ dunif(0,100)
+  tau.reg <- 1/sigma^2
+
+  # likelihood
+  # note that the data have been log-transformed in R prior to running this model
+ 
+  for (i in 1:length(log.emission)) {
+    log_mu[i] <- alpha + beta * log.n.input.centered[i]
+    log.emission[i] ~ dnorm(log_mu[i], tau.reg)
+    y.sim[i] ~ dnorm(log_mu[i], tau.reg)
+  }
+
+  # predicted emissions as derived quantities
+  for (i in 1:length(log.n.input.centered.pred)) {
+    log_mu_pred[i] <- alpha + beta * log.n.input.centered.pred[i]
+    mu_pred[i] <- exp(log_mu_pred[i])
+      }
+
+      # predictive check for standard deviation
+        sd.data <- sd(log.emission[])          # test statistic of the real data
+        sd.sim <- sd(y.sim[])                # test statistic of the simulated data
+        p.sd <- step(sd.sim - sd.data)       # calcualte the Bayesian test statistic 
+
+      # predictive check for mean
+        mean.data <- mean(log.emission[])      # test statistic of the real data
+        mean.sim <- mean(y.sim[])            # test statistic of the simulated data
+        p.mean <- step(mean.sim - mean.data) # calcualte the Bayesian test statistic 
+
+      # predictive check for the minimum value
+        min.data <- min(log.emission[])        # test statistic of the real data
+        min.sim <- min(y.sim[])              # test statistic of the simulated data
+        p.min <- step(min.sim - min.data)    # calcualte the Bayesian test statistic 
+
+      # predictive check for discrepancy
+        dis.data <- sum(log.emission[] - log_mu[])^2
+        dis.sim <- sum(y.sim[] - log_mu[])^2
+        p.dis <- step(dis.sim - dis.data)    # calcualte Bayesian test statistic
+  }
+    ", fill = TRUE)
+  sink()
+}
+
+
+n.adapt = 3000
+n.update = 5000
+n.iter = 5000
+jm.pooled = jags.model(file="PooledJAGS.R", 
+data = data, n.adapt = n.adapt, inits = inits, n.chains = length(inits))
+
+
+update(jm.pooled, n.iter = n.update)
+zc.pooled = coda.samples(jm.pooled, 
+variable.names = c("alpha","beta","sigma","tau.reg",
+                   "p.sd","p.mean","p.min","p.dis"), 
+n.iter = n.iter)
+
+```
+
+```{r,message=FALSE, warning=FALSE}
+options(width=60)
+###### look at results #######
+# summary table with effective sample sizes
+MCMCsummary(zc.pooled, n.eff = TRUE)
+
+# Overlay the posterior distribution of the simulated data on the histogram of the real data 
+# (density on y axis, not frequency).
+zc.pooled = coda.samples(jm.pooled, 
+variable.names = c("y.sim"), n.iter = n.iter, n.thin = 1)
+
+y.sim.chain <- MCMCpstr(zc.pooled, params="y.sim")
+y.emission <- log(N2OEmission$emission)
+
+hist(y.emission, probability=TRUE, breaks=100,  
+     col="salmon", ylim=c(0, 1), xlim = c(-12, 5), 
+     xlab = "log(NO2 Emissions)", main = "")
+hist(y.sim.chain$y.sim, probability=TRUE, add = TRUE, breaks=100,col="seagreen")
+
+```
+
+What do you conclude? Is there any indication of lack of fit? Enough to discard the model?
+
+The p-values for all of the test statistics were around 0.5, except for p.min which was 1, indicating lack of fit. The distribution of the simulated data is also vary narrow and probably needs more variance to match the real data better. 
