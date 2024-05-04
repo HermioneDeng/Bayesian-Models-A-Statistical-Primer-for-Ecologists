@@ -1,0 +1,444 @@
+---
+title: "Lab_6_JAGS_problems"
+author: 'Team USA: Yuting Deng, Kendra Gilbertson, Lily Durkee, Bennett Hardy'
+date: "2022-10-10"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+Contact: Hermione.Deng\@colostate.edu, kendra01\@colostate.edu, L.Durkee\@colostate.edu,Bennett.Hardy\@colostate.edu
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+library(rjags)
+library(MCMCvis)
+library(HDInterval)
+library(BayesNSF)
+library(boot)
+library(ggplot2)
+set.seed(10)
+```
+
+Motivation
+JAGS allows you to implement models of high dimension once you master its syntax and logic. It is a great tool for ecological analysis. The problems that follow challenge you to:
+
+Write joint distributions as a basis for writing JAGS code.
+Write JAGS code to approximate marginal posterior distributions of derived quantities.
+Plot model output in revealing ways.
+Understand the effect of vague priors on parameters and on predictions of non-linear models.
+
+
+## Derived quantities with the logistic
+One of the most useful features of MCMC is its equivariance property which means that any quantity that is a function of a random variable in the MCMC algorithm becomes a random variable. Consider two quantities of interest that are functions of our estimates of the random variables r and K:
+
+The population size where the population growth rate is maximum, $\frac{K}{2}$
+The rate of population growth, $\frac{dN}{dt}=rN(1-\frac{N}{K})$
+You will now do a series of problems to estimate these quantities of interest. Some hints for the problems below:
+
+Include expressions for each derived quantity in your JAGS code.
+You will need to give JAGS a vector of N values to plot $\frac{dN}{dt}$ vs N.
+Use a JAGS object for plotting the rate of population growth.
+Look into using the ecdf() function on a JAGS object. It is covered in the JAGS primer.
+
+
+1. Approximate the marginal posterior distribution the population size where the population growth rate is maximum and plot its posterior density. You may use the work you have already done in the JAGS Primer to speed this along.
+
+```{r}
+{# Extra bracket needed only for R markdown files - see answers
+  sink("Lab_6_LogisticJAGS.R") # This is the file name for the jags code
+  cat("
+ model{
+ 
+   # priors
+   K ~ dunif(0, 4000)
+   r ~ dunif (0, 2)
+   sigma ~ dunif(0, 2)
+   tau <- 1 / sigma^2
+   
+   # likelihood
+   for(i in 1:n){
+     mu[i] = r - r / K * x[i]
+     y[i] ~ dnorm(mu[i], tau)
+   }
+   
+   # derived quantities
+   
+   # maxmium growth rate
+   N_maxdNdt = K/2
+   
+   # the rate of population growth rate
+   for (j in 1:length(N)){
+    dNdt[j] = r*N[j]*(1-N[j]/K)
+   }
+        
+ }
+ ",fill = TRUE)
+  sink()
+} # Extra bracket needed only for R markdown files - see answers
+
+```
+
+```{r Q1}
+rm(list = ls())
+Logistic  = Logistic[order(Logistic$PopulationSize),] 
+        #Logistic is the dataframe in BayesNSF library
+
+#initial condition for MCMC chain
+inits = list(
+  list(K = 1500, r = .2, sigma = 1),
+  list(K = 1000, r = .15, sigma = .1),
+  list(K = 900, r = .3, sigma = .01))
+
+N = seq(0, 2000, 10)
+N[1] = 1
+
+data = list(
+  n = nrow(Logistic),
+  x = as.double(Logistic$PopulationSize),
+  y = as.double(Logistic$GrowthRate),
+  N = N)
+
+n.adapt = 5000 # the number of iterations that JAGS will use to choose the sampler and 
+               # to assure optimum mixing of the MCMC chain
+n.update = 10000 # the number of iterations that will be discarded to allow the chain 
+              # to converge before iterations are stored (aka, burn-in); we will throw 
+              # away the first 10,000 values
+n.iter = 20000 # the number of iterations that will be stored in the chain as samples 
+              # from the posterior distribution – it forms the “rug”.
+
+# Call to JAGS
+#sets up the MCMC chain
+jm = jags.model("Lab_6_LogisticJAGS.R", data = data, inits = inits,
+                n.chains = length(inits), n.adapt = n.adapt)
+
+update(jm, n.iter = n.update) #n.iter is the update statement in JAGS
+
+#creates the chains and stores them as an MCMC list
+zm = coda.samples(jm, variable.names = c("K", "r", "sigma", "tau", "N_maxdNdt", "dNdt"),
+                  n.iter = n.iter, n.thin = 1)
+
+N_maxdNdt = MCMCchains(zm, params = c("N_maxdNdt"))
+
+
+N_maxdNdt_df = as.data.frame(N_maxdNdt)
+ggplot(N_maxdNdt_df, aes(x=N_maxdNdt))+
+  geom_density()+
+  #geom_rug()+
+  labs(x ="Population size with maximum growth rate", y = "Probability density")
+```
+
+
+2. Plot the median growth rate of the population (not the per-capita rate) rate and a 95% highest posterior density interval as a function of N. What does this curve tell you about the difficulty of sustaining harvest of populations?
+```{r Q2}
+HPDI = MCMCpstr(zm, params = c("dNdt"), func = function(x)
+  hdi(x, 0.95))
+dNdt_median = MCMCpstr(zm, params = c("dNdt"), func = median)
+
+df_2 = data.frame(N,dNdt_median, HPDI)
+
+ggplot(df_2)+
+  geom_line(aes(x=N, y=dNdt))+
+  geom_line(aes(x=N, y=dNdt.upper), lty="dashed")+
+  geom_line(aes(x=N, y=dNdt.lower), lty="dashed")+
+  labs(x="Population size (N)", y = "Population growth rate (dN/dt)")+
+  ylim(-350, 100)
+```
+
+
+3. What is the probability that the intrinsic rate of increase (r) exceeds 0.22? What is the probability that r falls between 0.18 and 0.22?
+```{r Q3}
+r.ex = MCMCchains(zm, params="r")
+1 - ecdf(r.ex)(0.22)
+ecdf(r.ex)(0.22) - ecdf(r.ex)(0.18)
+```
+
+
+## Lizards on islands
+This problem is courtesy of McCarthy (2007). Polis et al. (1998) analyzed the probability of occupancy of islands p by lizards as a function of the ratio of the islands’ perimeter to area ratios. The data from this investigation are available in the data frame IslandsLizards. The response data, as you will see, are 0 or 1, 0 if there were no lizards found on the island, 1 if there were 1 or more lizards observed. You are heroically assuming that if you fail to find a lizard, none are present on the island.
+
+1. Construct a simple Bayesian model that represents the probability of occupancy as:
+$g(a,b,x_i)=\frac{e^{a+bx_i}}{1+e^{a+bx_i}}$,
+
+where $x_i$ is the perimeter to area ratio of the $i^{th}$ island. So, now that you have the deterministic model, the challenge is to choose the proper likelihood to link the data to the model. How do the data arise? What likelihood function is needed to represent the data?
+
+############
+
+The response data (whether there is lizard on the island or not) arises from a Bernoulli distribution: $y[i] \sim Bernoulli(p)$, where p is the probability of presence (equal to the perimeter to area ratio).
+
+############
+
+2. Write the expression for the posterior and joint distribution of the parameters and data, as we have learned how to do in lecture. Use the joint distribution as a basis for JAGS code needed to estimate the posterior distribution of a and b. Assume vague priors on the intercept and slope, e.g., $\beta_0 \sim normal(0,10000)$, $\beta_1 \sim normal(0,10000)$. Draw a DAG if you like. There doesn’t appear to be any variance term in this model. How can that be?
+
+$[a,b\mid y] \sim Bernoulli(y_i \mid g(a, b, x_i)) normal (a \mid 0, 1000) normal(b \mid 0, 1000)$
+$p = g(a,b,x_i)=\frac{e^{a+bx_i}}{1+e^{a+bx_i}}$
+
+```{r}
+{# Extra bracket needed only for R markdown files - see answers
+  sink("Lab_6_IslandLizards.R") # This is the file name for the jags code
+  cat("
+ model{
+ 
+   # priors
+   a ~ dnorm(0, 0.001)
+   b ~ dnorm(0, 0.001)
+   
+   # likelihood
+   for(i in 1:n){
+     logit(p[i]) <- a + b*x[i] 
+     y[i] ~ dbern(p[i])
+   }
+        
+ }
+ ",fill = TRUE)
+  sink()
+} # Extra bracket needed only for R markdown files
+```
+
+
+3. Using JAGS, run MCMC for three chains for the parameters a and b and the derived quantity pi, the probability of occupancy. JAGS has a function, ilogit for the inverse logit that you might find helpful.Selecting initial conditions can be a bit tricky with the type of likelihood you will use here. You may get the message:
+Error in jags.model(“IslandsJags.R”, data = data, inits, n.chains = length(inits), : Error in node y[4] Observed node inconsistent with unobserved parents at initialization.
+
+To overcome this, try the following:
+
+Standardize the the perimeter to area ratio covariate using the scale function in R, which subtracts the mean of the data from every data point and divides by the standard deviation of the data. You want the default arguments for center and scale in this function.
+Choose initial values for a and b so that $inverse logit(a+bstandardized(xi))$ is between .01 and .99.
+
+```{r}
+set.seed(10)
+rm(list = ls())
+
+#initial condition for MCMC chain
+inits = list(
+  list(a = runif(1, -2, 2), b =runif(1, -2, 2)),
+  list(a = runif(1, -2, 2), b =runif(1, -2, 2)),
+  list(a = runif(1, -2, 2), b =runif(1, -2, 2))
+)
+
+data = list(
+  n = nrow(IslandsLizards),
+  x = as.double(scale(IslandsLizards$perimeterAreaRatio)),
+  y = as.double(IslandsLizards$presence)
+  )
+
+n.adapt = 5000 # the number of iterations that JAGS will use to choose the sampler and to 
+                # assure optimum mixing of the MCMC chain
+n.update = 10000 # the number of iterations that will be discarded to allow the chain to 
+                #converge before iterations are stored (aka, burn-in); we will throw away 
+                # the first 10,000 values
+n.iter = 10000 # the number of iterations that will be stored in the chain as samples from 
+              #the posterior distribution – it forms the “rug”.
+
+
+# Call to JAGS
+#sets up the MCMC chain
+jm = jags.model("Lab_6_IslandLizards.R", data = data, inits = inits,
+                n.chains = length(inits), n.adapt = n.adapt)
+
+update(jm, n.iter = n.update) #n.iter is the update statement in JAGS
+
+#creates the chains and stores them as an MCMC list
+zm = coda.samples(jm, variable.names = c("a", "b"),
+                  n.iter = n.iter, n.thin = 1)
+```
+
+
+4. Do a summary table, a plot of the marginal posterior densities of of the posterior density and a trace of the chain for parameters a and b. Does the trace indicate convergence? How can you tell? Use Gelman and Heidel diagnostics to check for convergence.
+
+```{r}
+MCMCsummary(zm)
+
+MCMCtrace(zm, pdf=FALSE)
+
+gelman.diag(zm)
+
+heidel.diag(zm)
+```
+
+########
+The trace indicates convergence because Rhats are 1 for both a and b. All chains and all parameters pass the Heidelberger test for stationary and halfwidth.
+########
+
+5. Plot the data as points. Overlay a line plot of the median and 95% highest posterior density intervals of the predicted probability of occurrence as a function of island perimeter to area ratios ranging from 1-60. Hint–create a vector of 1-60 in R, and use it as x values for an equation making predictions in your JAGS code. The curve is jumpy if you simply plot the predictions at the island perimeter to area data points. Remember, however, that the x’s have been standardized to fit the coefficients, so you need to make predictions using standardized values in the sequence you create. You may plot these predictions against the un-standardized perimeter to area ratios, a plot that is more easily interpreted than plotting against the standardized ratios.
+
+```{r}
+{# Extra bracket needed only for R markdown files - see answers
+  sink("Lab_6_Lizards.R") # This is the file name for the jags code
+  cat("
+ model{
+ 
+   # priors
+   a ~ dnorm(0, 0.001)
+   b ~ dnorm(0, 0.001)
+   
+   # likelihood
+   for(i in 1:n){
+     logit(p[i]) <- a + b*x[i] 
+     y[i] ~ dbern(p[i])
+   }
+   
+   # derived parameter
+   for (j in 1:length(IP)){
+    p_hat[j] = ilogit(a+b*IP[j])
+   }
+        
+ }
+ ",fill = TRUE)
+  sink()
+} # Extra bracket needed only for R markdown files
+```
+
+
+```{r}
+#initial condition for MCMC chain
+inits = list(
+  list(a = runif(1, -2, 2), b =runif(1, -2, 2)),
+  list(a = runif(1, -2, 2), b =runif(1, -2, 2)),
+  list(a = runif(1, -2, 2), b =runif(1, -2, 2))
+)
+
+data = list(
+  n = nrow(IslandsLizards),
+  x = as.double(scale(IslandsLizards$perimeterAreaRatio)),
+  y = as.double(IslandsLizards$presence),
+  IP = as.double((seq(1,60,0.1) - mean(IslandsLizards$perimeterAreaRatio))/
+                   sd(IslandsLizards$perimeterAreaRatio))
+  )
+
+n.adapt = 5000 # the number of iterations that JAGS will use to choose the sampler and 
+               # to assure optimum mixing of the MCMC chain
+n.update = 10000 # the number of iterations that will be discarded to allow the chain 
+              # to converge before iterations are stored (aka, burn-in); we will throw 
+              # away the first 10,000 values
+n.iter = 10000 # the number of iterations that will be stored in the chain as samples 
+              # from the posterior distribution – it forms the “rug”.
+
+
+# Call to JAGS
+#sets up the MCMC chain
+jm = jags.model("Lab_6_Lizards.R", data = data, inits = inits,
+                n.chains = length(inits), n.adapt = n.adapt)
+
+update(jm, n.iter = n.update) #n.iter is the update statement in JAGS
+
+#creates the chains and stores them as an MCMC list
+zm = coda.samples(jm, variable.names = c("p_hat"),
+                  n.iter = n.iter, n.thin = 1)
+
+HPDI = MCMCpstr(zm, params = c("p_hat"), func = function(x)
+  hdi(x, 0.95))
+p_median = MCMCpstr(zm, params = c("p_hat"), func = median)
+
+IP = seq(1, 60, 0.1)
+df = data.frame(IP, p_median, HPDI)
+df2 = data.frame(IslandsLizards)
+
+ggplot(df)+
+  geom_line(aes(x=IP, y=p_hat))+
+  geom_line(aes(x=IP, y=p_hat.upper), lty="dashed")+
+  geom_line(aes(x=IP, y=p_hat.lower), lty="dashed")+
+  labs(x="Perimeter to area ratio", y = "Occupancy")
+```
+
+6. Assume you are interested in 2 islands, one that has a perimeter to area ratio of 10, the other that has a perimeter to area ratio of 20. What is the 95% highest posterior density interval on the difference in the probability of occupancy of the two islands based on the analysis you did above? What is the probability that the difference exceeds 0? Remember that the data are standardized when you do this computation.
+
+```{r}
+{# Extra bracket needed only for R markdown files - see answers
+  sink("Lab_6_Lizards.R") # This is the file name for the jags code
+  cat("
+ model{
+ 
+   # priors
+   a ~ dnorm(0, 0.001)
+   b ~ dnorm(0, 0.001)
+   
+   # likelihood
+   for(i in 1:n){
+     logit(p[i]) <- a + b*x[i] 
+     y[i] ~ dbern(p[i])
+   }
+   
+   # derived parameter
+   for (j in 1:length(IP)){
+    p_hat[j] = ilogit(a+b*IP[j])
+   }
+   
+   p_10 = ilogit(a+b*(10-mu)/sd)
+   p_20 = ilogit(a+b*(20-mu)/sd)
+   p_diff = p_10 - p_20
+        
+ }
+ ",fill = TRUE)
+  sink()
+} # Extra bracket needed only for R markdown files
+```
+
+```{r}
+#note the scaling functions for x and PA above
+data = list(
+  n = nrow(IslandsLizards),
+  x = as.double(scale(IslandsLizards$perimeterAreaRatio)),
+  y = as.double(IslandsLizards$presence),
+  IP = as.double((seq(1,60,0.1) - mean(IslandsLizards$perimeterAreaRatio))/
+                   sd(IslandsLizards$perimeterAreaRatio)),
+  mu = mean(IslandsLizards$perimeterAreaRatio),
+  sd = sd(IslandsLizards$perimeterAreaRatio)
+  )
+
+jm = jags.model("Lab_6_Lizards.R", data = data, inits = inits, n.chains = length(inits), 
+                n.adapt = n.adapt)
+
+update(jm, n.iter = n.update)
+zm = coda.samples(jm, variable.names = c("p_diff", "p_hat"), n.iter = n.iter, n.thin = 1)
+diff = MCMCchains(zm, params = "p_diff")
+
+hdi(diff, .95)
+
+1 - ecdf(diff)(0)
+
+plot(density(diff), main = "", 
+     xlab = "Difference in the probability of occupancy of the two islands", 
+     ylab = "Probability Density")
+```
+
+7. What fundamentally important source of error are we sweeping under the rug in all of these fancy calculations? What are the consequences of failing to consider this error for our estimates? Do you have some ideas about how we might cope with this problem?
+
+######
+We are ignoring imperfect detection of lizard in this problem. If we assume that all our non-detection are true zeros, we will underestimate the probability of occupancy, and our posterior distributions will not be accurate. One solution would be to use a zero-inflated negative binomial model, which accounts for the over abundance of zeros in our model.
+
+######
+
+## Vague priors in non-linear models
+The priors you chose above were vague for the intercept and slope in the logistic regression but they were not vague for pi. This is generally true for the output of nonlinear functions like the inverse logit (Lunn et al., 2012; Seaman et al., 2012), so you need to be careful about inference on the output of these non-linear function. See Hobbs and Hooten (2015) section 5.4.1 for an explanation of priors in logistic regression. It is prudent to to explore the effect of different values for priors on the shape of a the “prior” for quantities that are non-linear functions of model parameters, as demonstrated in the following exercise
+
+1. Write a function that takes an argument for the variance $\sigma^2$. The function should 1) simulate 10000 draws from a normal distribution with mean 0 and variance $\sigma^2$ representing a prior on a, remembering, of course, that the argument to rnorm is the standard deviation. 2) Plot histograms of the draws for a. 3) Plot a histogram of the inverse logit of the random draws, representing a “prior” on p at the mean of x (i.e., where the scaled value of x = 0). Plotting these in side by side panels will facilitate comparison. Use your function to explore the effect of different variances ranging from 1 to 10000 on the priors for a and p. Find a value for the variance that produces a flat “prior” on p. The boot library contains an inverse logit function or you can write your own.
+
+```{r}
+draw_n_plot = function(var){
+  a = rnorm(10000, mean=0, sqrt(var))
+  
+  hist(a, freq=FALSE, xlab = "a", main = paste("var = ", var))
+  
+  hist(inv.logit(a), freq=FALSE, xlab = "p", main = paste("var = ", var))
+}
+
+par(mfrow = c(2,2))
+draw_n_plot(10000)
+draw_n_plot(1000)
+draw_n_plot(100)
+draw_n_plot(10)
+draw_n_plot(5)
+draw_n_plot(4)
+draw_n_plot(3)
+draw_n_plot(1)
+```
+
+2. Rerun your analysis using priors on the coefficients that are vague for inference on p based on what you learned in Hobbs and Hooten section 5.4.1 and in the previous exercise. (Be careful to convert variances to precision) Plot the probability of occupancy as a function of perimeter to area ratio using these priors and compare with the plot you obtained in exercise 5, above. You will see that the means of the pi changes and uncertainty about pi increases when you use appropriately vague priors for p.
+
+
+These is conflict between priors that are vague for the parameters and vague for the predictions of the model. If your primary inference is on p then you want to choose values for the priors on a and b that are minimally informative for p. The simulation exercise above shows a way to do that. However, what if you need inference on a, b, and p? There are two possibilities. First, get more data so that the influence of the prior becomes negligible. The best way to assure priors are vague is to collect lots of high quality data.
+
+Second, use informative priors on the coefficients, even weakly informative ones. For example, you know that the slope should be negative and you know something about the probability of occupancy when islands are large. Centering the slope on a negative value rather than 0 makes sense because we know from many other studies that the probability of occupancy goes down as islands get smaller. Moreover, you could center the prior on the intercept on 3 using the reasoning that large islands are almost certainly occupied (when intercept = 3, p = .95 at PA = 0). Centering the priors on reasonable values (rather than 0) will make the results more precise and far less sensitive to the variance (or precision) chosen for the prior. Informative priors, even weakly informative ones, are helpful in many ways. We should use them.
+
+You could explore these solutions on a Sunday afternoon using the code your wrote above.

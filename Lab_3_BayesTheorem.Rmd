@@ -1,0 +1,300 @@
+---
+title: "Lab 3: Bayes’ Theorem"
+authors: 'Team USA: Yuting Deng, Kendra Gilbertson, Lily Durkee, Bennett Hardy'
+date: "2022-09-26"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	fig.height = 3.5,
+	fig.width = 5.5,
+	message = FALSE,
+	warning = FALSE,
+	attr.source = ".numberLines"
+)
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(ggpubr)
+library(mathjaxr)
+set.seed(10)
+```
+
+Contact: Hermione.Deng\@colostate.edu, kendra01\@colostate.edu, L.Durkee\@colostate.edu, Bennett.Hardy\@colostate.edu
+
+## Preliminaries
+
+Problem 1
+```{r}
+y = rpois(50, 6.4)
+var(y)
+```
+
+Problem 2
+
+```{r}
+hist(y,probability=TRUE)
+y_df = data.frame(y)
+f_hist1 = ggplot(y_df, aes(x=y))+
+  geom_histogram(aes(y = ..density..), breaks=c(2,3,4,5,6,7,8,9,10,11), color = "black")+
+  labs(title="Histogram of data",y="Density")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+f_hist2 = ggplot(y_df, aes(x=y))+
+  geom_histogram(aes(y = ..density..), color = "black")+
+  labs(title="Histogram of data",y="Probability",x="x")+
+  theme(plot.title = element_text(hjust = 0.5))
+f_hist2
+```
+
+
+Problem 3 and 4
+```{r}
+mu.prior = 10.2
+mu.prior
+sigma.prior = 0.5 #standard deviation
+sigma.prior
+
+theta = seq(0, 15, 0.01)
+head(theta)
+```
+
+## The prior distribution of $\theta$
+
+Problem 5
+
+$\theta \sim$ gamma $(\frac{10.2^2}{0.5^2}, \frac{10.2}{0.5^2})$
+
+```{r}
+prior <- function(theta, mu, sigma){
+  #gamma distribution moment match
+  alpha = mu^2/sigma^2
+  beta = mu/sigma^2
+  prob_density = dgamma(theta, alpha, beta)
+}
+```
+
+Problem 6
+```{r}
+prior_df = data.frame(theta, density = prior(theta, mu.prior, sigma.prior))
+f_prior = ggplot(prior_df, aes(x=theta, y=density))+
+  geom_line()+
+  labs(x=expression(theta), title="Prior",y=expression(paste("[", theta, "]")))+
+  theme(plot.title = element_text(hjust = 0.5))
+f_prior
+```
+
+Problem 7
+
+```{r}
+alpha = mu.prior^2/sigma.prior^2
+beta = mu.prior/sigma.prior^2
+gam = rgamma(100000, alpha, beta)
+mean(gam)
+sd(gam)
+```
+With a large sample size, the mean and variance will approximate the true mean and variance.
+
+
+## The likelihood
+
+Problem 8
+
+$[\emph{y} \mid \theta] =\prod_{i=1}^{n}$ Poisson $(y_i|\theta)$
+
+```{r}
+like <- function(theta, y){
+  #your code to calculate total likelihood of the data conditional on each value of theta}
+    y_theta = prod(dpois(y,theta))
+  return(y_theta)
+}
+```
+
+Problem 9
+```{r}
+likelihood = c()
+for (i in 1:length(theta)){
+  likelihood[i] = like(theta[i], y)
+}
+
+like_df = data.frame(theta, likelihood)
+
+f_likelihood = ggplot(like_df, aes(x=theta, y=likelihood))+
+  geom_line()+
+  labs(x=expression(theta), title="Likelihood",y=expression(paste("[y | ", theta, "]")))+
+  theme(plot.title = element_text(hjust = 0.5))
+f_likelihood
+```
+
+This plot is called likelihood profile, and the area under the curve does not sum to one. The relative inference is not affected whether or not we multiple the curve by a constant.
+
+
+## The joint distribution
+
+Problem 10
+
+$[\theta,\emph{y}]=\prod_{i=1}^{n}$ Poisson $(y_i|\theta)$ gamma $(\theta,\frac{10.2^2}{0.5^2},\frac{10.2}{0.5^2})$
+
+```{r}
+joint_theta = c()
+for (i in 1:length(theta)){
+  joint_theta[i] = like(theta[i], y)*prior(theta[i],mu.prior, sigma.prior)
+}
+
+joint_df = data.frame(theta, joint=joint_theta)
+f_joint = ggplot(joint_df, aes(x=theta, y=joint))+
+  geom_line()+
+  labs(x=expression(theta), title="Joint Distribution",
+       y=expression(paste("[y | ", theta, "] x [",theta,"]")))+
+  theme(plot.title = element_text(hjust = 0.5))
+f_joint
+```
+
+The small number seem reasonable because we have multiplied to densities together, and multiplying numbers less than 1 gives you an even smaller number. We are adding another dimension to our distribution, and the area under the curve must still integrate to 1. 
+
+
+## The marginal probability of the data
+
+$[\emph{y}]=\int_{-\infty}^{\infty}\prod_{i=1}^{n}$ Poisson $(y_i|\theta)\ $ x gamma $(\theta,\frac{10.2^2}{0.5^2}, \frac{10.2}{0.5^2}) d\theta$
+
+
+```{r}
+#11
+sum(.01*joint_theta)
+```
+
+To find the area under the curve we take the integral, or approximate the integral by summing increasingly thinner bars that make up the distribution. Here we multiple the height of each bar by our predetermined width (0.01) to find the area. Y is a random variable governed by a distribution until we collect the data, at which point it becomes a vector of values that evaluates to a scalar.
+
+
+## The posterior distribution
+
+Problem 12
+
+$[\theta \mid y] = \frac{\prod_{i=1}^{n}$ Poisson $(y_i \mid \theta)$ gamma $(\theta,\frac{10.2^2}{0.5^2}, \frac{10.2}{0.5^2})} {\int_{-\infty}^{\infty}  \prod_{i=1}^{n}$ Poisson $(y_i \mid \theta)$ gamma $(\theta,\frac{10.2^2}{0.5^2}, \frac{10.2}{0.5^2})} $
+
+```{r}
+posterior_df = data.frame(theta, posterior = joint_df$joint/sum(joint_theta*0.01))
+f_posterior = ggplot(posterior_df, aes(x=theta, y=posterior))+
+  geom_line()+
+  labs(x=expression(theta), title="Posterior Distribution",y=expression(paste("[", theta, "| y]")))+
+  theme(plot.title = element_text(hjust = 0.5))
+f_posterior
+```
+
+
+## Putting it all together
+
+Problem 13
+```{r}
+library(ggpubr)
+ggarrange(f_prior, f_hist1, f_hist2, f_likelihood, f_joint, f_posterior, ncol = 3, nrow = 2)
+```
+
+Problem 14
+```{r}
+max(like_df$likelihood)
+like_df = like_df %>% 
+  mutate(likelihood.2 = likelihood/max(like_df$likelihood))
+
+
+ggplot()+
+  geom_line(posterior_df, mapping=aes(x=theta, y=posterior), color="blue")+
+  geom_line(prior_df, mapping=aes(x=theta, y=density), color="green")+
+  geom_line(like_df, mapping=aes(x=theta, y=likelihood.2), color="red")+
+  labs(x=expression(theta), title="Distribution Plot",y="Density")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Problem 15
+```{r}
+posterior_conj <- function(theta){
+  #gamma distribution 
+  alpha_conj = alpha + sum(y)
+  beta_conj = beta + 50
+  prob_density = dgamma(theta, alpha_conj, beta_conj)
+  return (prob_density)
+}
+
+posterior_df_conj = data.frame(theta, density = posterior_conj(theta))
+
+ggplot()+
+  geom_line(posterior_df, mapping=aes(x=theta, y=posterior), color="blue", alpha = 0.2, size=2)+
+  geom_line(posterior_df_conj, mapping=aes(x=theta, y=density), color="green",alpha = 0.2, size=2)+
+  labs(x=expression(theta), title="Scaled Overlay",y="Probability Density")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+The likelihood profile for $\theta$ has much less dispersion than our histogram because we are using 1450 more data points. The more data we have, the less variance within our sample.
+
+
+Problem 16
+```{r}
+#varaiance to 2.5
+prior_df_2 = data.frame(theta, density = prior(theta, 10.2, 2.5))
+
+joint_theta_2 = c()
+for (i in 1:length(theta)){
+  joint_theta_2[i] = like(theta[i], y)*prior(theta[i],10.2, 2.5)
+}
+
+joint_df_2 = data.frame(theta, joint=joint_theta_2)
+
+posterior_df_2 = data.frame(theta, posterior = joint_df_2$joint/sum(joint_theta*0.01))
+
+ggplot()+
+  geom_line(posterior_df_2, mapping=aes(x=theta, y=posterior), color="blue")+
+  geom_line(like_df, mapping=aes(x=theta, y=likelihood.2), color="red")+
+  geom_line(prior_df_2, mapping=aes(x=theta, y=density), color="green")+
+  labs(x=expression(theta), title="Scaled Overlay (variance = 2.5)")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+#varaiance to 0.5
+prior_df_2 = data.frame(theta, density = prior(theta, 10.2, 0.1))
+
+joint_theta_2 = c()
+for (i in 1:length(theta)){
+  joint_theta_2[i] = like(theta[i], y)*prior(theta[i],10.2, 0.1)
+}
+
+joint_df_2 = data.frame(theta, joint=joint_theta_2)
+
+posterior_df_2 = data.frame(theta, posterior = joint_df_2$joint/sum(joint_theta*0.01))
+
+ggplot()+
+  geom_line(posterior_df_2, mapping=aes(x=theta, y=posterior), color="blue")+
+  geom_line(like_df, mapping=aes(x=theta, y=likelihood.2), color="red")+
+  geom_line(prior_df_2, mapping=aes(x=theta, y=density), color="green")+
+  labs(x=expression(theta), title="Scaled Overlay (variance = 0.1)")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# increase the number of observations to 100
+y_2 = rpois(100, 6.4)
+likelihood_2 = c()
+for (i in 1:length(theta)){
+  likelihood_2[i] = like(theta[i], y_2)
+}
+
+like_df_2 = data.frame(theta, likelihood_2)
+max(like_df_2$likelihood_2)
+like_df_2 = like_df_2 %>% 
+  mutate(likelihood.2 = likelihood_2/max(like_df_2$likelihood_2))
+
+ggplot()+
+  geom_line(posterior_df, mapping=aes(x=theta, y=posterior), color="blue")+
+  geom_line(like_df_2, mapping=aes(x=theta, y=likelihood.2), color="red")+
+  geom_line(prior_df, mapping=aes(x=theta, y=density), color="green")+
+  labs(x=expression(theta), title="Scaled Overlay (n = 100)")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+Problem 17
+Increasing the variance of the prior gave us a flatter distribution and gave the likelihood more wegiht in the posterior distribution. Decreasing the variance of the prior has the opposite affect, and the prior is more informative. Increasing the sample size decreased the variance in both the likelihood and the posterior.
+

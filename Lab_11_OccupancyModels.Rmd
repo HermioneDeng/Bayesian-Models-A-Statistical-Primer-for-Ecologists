@@ -1,0 +1,210 @@
+---
+title: 'Lab 11: Swiss Birds Occupancy Modeling Lab'
+author: "Hermione.Deng@colostate.edu, kendra01@colostate.edu,  L.Durkee@colostate.edu,Bennett.Hardy@colostate.edu"
+date: "2022-11-14"
+output:
+  pdf_document: default
+  html_document: default
+subtitle: 'Team USA: Yuting Deng, Kendra Gilbertson, Lily Durkee, Bennett Hardy'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE,
+	attr.source = ".numberLines"
+)
+library(rjags)
+library(MCMCvis)
+library(HDInterval)
+library(BayesNSF)
+library(ggplot2)
+set.seed(10)
+```
+
+## Problem
+A fundamental question in landscape ecology seeks to understand how landscape structure shapes variation in habitat use by species. We will use data from the Swiss Survey of Common Breeding Birds, courtesy of Royle and Dorazio (2008), to model habitat occupancy by a resident bird in the Swiss Alps, the willow tit (*Parus montanus*). The data come from annual surveys of one km$^2$ quadrats distributed across Switzerland. Surveys are conducted during the breeding season on three separate days, but some quadrats have missing data so that the number of replicate observations is fewer than three.
+
+During each survey, an observer records every visual or acoustic detection of a breeding species (we do not differentiate between these two types of detection in this problem) and marks its location using a global positioning system or, in earlier years, a paper map. We assume that the true state (occupied or unoccupied) does not change among sample dates, an assumption known as closure. This assumption is reasonable because we are observing a resident species during the breeding season.
+
+We want to understand the influence of forest cover and elevation on the distribution of the willow tit. The data frame SwissBirds has the number of times a quadrat (`quadrat`) was searched (`numberVisits`) and the number of times willow tits were detected (`numberDetections`). We have covariates on forest canopy cover (`forestCover`) as well as elevation in meters (`elevation`) for each quadrat surveyed. Data on detection each day on each quadrat (0 or 1) are also available. Develop a model of the influence of forest cover and elevation on the distribution of willow tits. Your model should allow estimation of the optimum elevation of willow tit habitat at the mean forest cover, where optimum elevation is defined as the elevation where probability of occupancy is maximum.
+
+&nbsp;
+
+### 1. Diagram the network of knowns and unknowns.
+
+![Directed acyclic graph for bird occupancy.](DAG1.jpeg)
+
+### 2. Write a mathematical expression for the posterior and the joint distribution.
+
+
+$$
+\begin{aligned}
+\big[\, p, \textbf{z}, \boldsymbol{\beta}, \boldsymbol{\alpha}, \sigma^2 \mid \textbf{y}] & \propto  \prod_{i=1}^{237}\textrm{binomial}\big(y_{i}\mid p \cdot z_{i}, n_{i}\big) \times \textrm{Bernoulli}\big(z_{i} \mid \psi \big) \times \prod_{j=1}^{4} \textrm{normal}\big(\beta_{j} \mid 0,10000\big) \times \textrm{beta}\big(p \mid 1,1\big) \\
+\psi & =  \textrm{logit}^{-1}\big(\,\beta_{1} + \beta_{2}\textrm{x}_{1i} + \beta_{3}\textrm{x}_{2i} + \beta_{4}\textrm{x}_{3i}^{2}  \big)
+\end{aligned}
+$$
+
+
+### 3. Modify your model to include the effect of search time and wind speed (measured at each quadrat on each day) on detection probability. Draw a DAG and write the posterior and joint distributions. In so doing, assume that posterior predictive checks of a preliminary detection model revealed that you need to include an explicit variance term for the detection probability.
+
+![Directed acyclic graph for the joint distribution of bird occupancy including search time and wind speed.](DAG2.jpeg)
+
+
+$$
+\begin{aligned}
+\big[\, p, \textbf{z}, \boldsymbol{\beta}, \mu, \sigma^2 \mid \textbf{y}] & \propto  \prod_{i=1}^{237}\textrm{binomial}\big(y_{i}\mid p \cdot z_{i}, n_{i}\big) \times \textrm{Bernoulli}\big(z_{i} \mid \psi \big) \times \text{beta}\big(p \mid \mu, \sigma^2) \\
+&\times \prod_{j=1}^{4} \textrm{normal}\big(\beta_{j} \mid 0,10000\big) \times \prod_{k=1}^{3} \textrm{normal}\big(\alpha_{k} \mid 0,10000\big) \times \text{inverse gamma}(\sigma^2 \mid 0.001, 0.001) \\
+\psi & =  \textrm{logit}^{-1}\big(\,\beta_{1} + \beta_{2}\textrm{x}_{1i} + \beta_{3}\textrm{x}_{2i} + \beta_{4}\textrm{x}_{3i}^{2}  \big) \\
+\mu &= \textrm{logit}^{-1}\big(\alpha_{1} + \alpha_{2}\textrm{y}_{1i} + \alpha_{3}\textrm{y}_{2i}  \big)
+\end{aligned}
+$$
+
+
+### 4. Approximate the marginal posterior distributions of parameters in the forest and elevation model with constant detection probability (the first one, above) using JAGS. Conduct posterior predictive checks. Some hints: 1) You will need to standardize the covariates by subtracting the mean and dividing by the standard deviation for each observation in the elevation and forest cover data. Use the scale function to do this (it will drastically speed convergence). 2) You *must* give initial values of 1 to all unknown 0 or 1 z states.
+
+```{r,echo=TRUE}
+# QUESTION 4
+df = SwissBirds
+elev.pred = seq(250, 2750, 10)
+data = list(
+ #as.vector help preserving only the numbers
+  forest = as.double(as.vector(scale(df$forestCover))),
+  elevation = as.double(as.vector(scale(df$elevation))),
+  n.visit = as.double(df$numberVisits),
+  y = as.double(df$numberDetections),
+  sd.elev = sd(df$elevation),
+  mu.elev = mean(df$elevation),
+  elev.pred = as.double(as.vector(scale(seq(250, 2750, 10)))))
+inits = list(
+  list(z = rep(1, nrow(SwissBirds)), p = runif(1, 0, 1), beta = runif(4, -2, 2)),
+  list(z = rep(1, nrow(SwissBirds)), p = runif(1, 0, 1), beta = runif(4, -2, 2)),
+  list(z = rep(1, nrow(SwissBirds)), p = runif(1, 0, 1), beta = runif(4, -2, 2)))
+# initial value cannot use p=1 (error:Node inconsistent with parents)
+```
+
+```{r,echo=TRUE}
+{
+sink("Lab_11_SwissBirds.R")
+cat("
+model{
+  # priors
+  
+  p ~ dbeta(1,1)
+  
+  for (i in 1:4){
+    beta[i] ~ dnorm(0, 0.0001)
+  }
+  # likelihood
+ 
+  for (i in 1:237) {
+    z[i] ~ dbern(phi[i])
+    logit(phi[i]) = beta[1] + beta[2]*forest[i] + beta[3]*elevation[i] 
+                            + beta[4]*elevation[i]^2
+    y[i] ~ dbin(p*z[i], n.visit[i])
+    
+    # simulated data for posterior predictive checks
+    y.sim[i] ~ dbin(p*z[i], n.visit[i]) 
+  }
+  
+  # bayesian p values
+  
+  sd.data <- sd(y)
+  sd.sim <- sd(y.sim)
+  p.sd <- step(sd.sim - sd.data)
+  mean.data <- mean(y)
+  mean.sim  <- mean(y.sim)
+  p.mean <- step(mean.sim - mean.data)
+  
+  # dedrived quantity
+  
+  ele_max = beta[3]/(-2*beta[4]) #second drivative 
+  ele_max_ori_scale = ele_max*sd.elev + mu.elev
+  
+  for (j in 1:length(elev.pred)){
+  logit(psi.pred[j]) = beta[1] +  beta[3]*elev.pred[j] + beta[4]*elev.pred[j]^2 
+  # at the mean of forest cover, since it is scaled, mean = 0
+  }
+  
+}
+    
+",fill = TRUE)
+sink()
+}
+```
+
+&nbsp;
+
+### 5. Summarize the parameters and check chains for convergence. Exclude the predictions of $\psi$ from the summary if they were included in the coda object. What can you conclude about model fit?
+
+Based on our trace plots and Rhat values, we conclude that our model converged. 
+
+```{r}
+# QUESTION 5
+n.adapt = 3000
+n.update = 10000
+n.iter = 10000
+jm.check = jags.model(file="Lab_11_SwissBirds.R", 
+                      data = data, 
+                      n.adapt = n.adapt, 
+                      inits = inits, 
+                      n.chains = length(inits))
+update(jm.check, n.iter = n.update)
+zc.check = coda.samples(jm.check, 
+                        variable.names = c("p.sd", "p.mean", "y.sim", 
+                                           "beta", "ele_max_ori_scale", 
+                                           "psi.pred", "p"), 
+                        n.iter = n.iter)
+MCMCsummary(zc.check, n.eff = TRUE, excl = c("psi.pred", "y.sim"), digits = 3)
+MCMCtrace(zc.check, excl = c("psi.pred", "y.sim"), pdf=FALSE)
+```
+
+&nbsp;
+
+
+### 6. What can you conclude about the relative importance of elevation and forest cover in controlling the bird’s distribution? Plot the median probability of occupancy and the 95% highest posterior density interval as a function of elevation at the mean of forest cover. Find the optimum elevation of willow tit habitat at the mean forest cover, where optimum elevation is defined as the elevation where probability of occupancy is maximum. Plot a normalized histogram of MCMC output for the optimum elevation at the average forest cover. Overlay 0.95 highest posterior density limits on the optimum elevation.
+
+&nbsp;
+
+Based on our beta estimates from our scaled parameters, elevation was more important than forest cover in controlling the bird's distribution. When we maximize occupancy at mean forest cover, the optimum elevatio is approximately 1800m.
+
+
+
+```{r,fig.width=3.5,fig.height=3.5}
+# QUESTION 6
+#median probability of occupancy and the 95% highest posterior density interval
+psi.median <- MCMCpstr(zc.check, params=c("psi.pred"), func = median)
+psi.95 <-  MCMCpstr(zc.check, params=c("psi.pred"), func = function(x) hdi(x, .95))
+# .95 highest posterior density limits on the optimum elevation
+elev.95 = MCMCpstr(zc.check, params=c("ele_max_ori_scale"), func = function(x) hdi(x,.95)) 
+plot.df = data.frame(elev.pred, psi.median, psi.95)
+ggplot(plot.df)+
+  geom_line(aes(x=elev.pred, y=psi.pred))+
+  geom_line(aes(x=elev.pred, y=psi.pred.lower), lty = "dashed", col = "grey")+
+  geom_line(aes(x=elev.pred, y=psi.pred.upper), lty = "dashed", col = "grey")+
+  geom_vline(xintercept = mean(MCMCchains(zc.check, "ele_max_ori_scale")), 
+             linetype="dotted", color = "red")+
+  labs(x="Elevation (m)", y="Occupancy")+
+  scale_x_continuous(n.breaks = 8)+
+  theme_classic()
+hist(MCMCchains(zc.check, "ele_max_ori_scale"), 
+     breaks = 500, main = "", 
+     xlab = "Elevation (m)", 
+     xlim = c(250, 2750), 
+     freq = FALSE)
+abline(v= elev.95$ele_max_ori_scale[1], lty = "dashed", lwd = 2, col="red")
+abline(v = elev.95$ele_max_ori_scale[2], lty = "dashed", lwd = 2, col="red")
+```
+
+
+
+
+# Code
+
+```{r ref.label = knitr::all_labels(), echo = TRUE, eval = FALSE}
+# this R markdown chunk generates a code appendix
+```
+
+
+

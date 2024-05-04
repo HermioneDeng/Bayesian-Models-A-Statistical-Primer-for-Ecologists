@@ -1,0 +1,480 @@
+---
+title: "Lab_14_USA"
+author: "Hermione.Deng@colostate.edu, kendra01@colostate.edu,  L.Durkee@colostate.edu,Bennett.Hardy@colostate.edu"
+date: "2022-11-30"
+output: pdf_document
+always_allow_html: true
+subtitle: 'Team USA: Yuting Deng, Kendra Gilbertson, Lily Durkee, Bennett Hardy'
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE,
+	attr.source = ".numberLines"
+)
+library(BayesNSF)
+library(rjags)
+library(MCMCvis)
+library(HDInterval)
+set.seed(10)
+```
+
+## Motivation
+
+&nbsp;
+
+The Eurasian lynx (*Lynx lynx*) is a medium-sized predator with broad distribution in the boreal forests of Europe and Siberia. The lynx is classified as a threatened species throughout much of its range and there is controversy about the legal harvest of lynx in Sweden. Proponents of harvest argue that allowing hunting of lynx reduces illegal kill (poaching). Moreover, Sweden is committed to regulate lynx numbers to prevent excessive predation on reindeer because reindeer are critical to the livelihoods of indigenous pastoralists, the Sami. Many environmentalists oppose harvest, however, arguing that lynx are too rare to remove their fully protected status. A similar controversy surrounds management of wolves in the Western United States.
+
+
+A forecasting model for the abundance of lynx helps managers make decisions that can be justified to citizens. The model you will develop today is not a toy. It is currently used in Sweden and Norway to manage Lynx (H. Andren, N. T. Hobbs, M. Aronsson, H. Broseth, G. Chapron, J. D. C. Linnell, J. Odden, J. Persson, and E. B. Nilsen. Harvest models of small populations of a large carnivore using Bayesian forecasting. Ecological Applications, 30(3):e02063, 2020.)
+
+
+You have data on the number of lynx family groups censused in a managemengt unit as well as annual records of lynx harvested from the unit. You will model the population using the deterministic model:
+
+
+$$\begin{aligned}
+N_t=\lambda(N_{t-1}-H_{t-1})
+\end{aligned}$$.
+
+
+where $N_t$ is the true, unobserved abundance of lynx and $H_{t-1}$ is the number of lynx harvested during $t-1$ to $t$. The parentheses in this expression reflect the fact that harvest occurs immediately after census, such that the next years population increment comes from the post-harvest population size.
+
+
+&nbsp;
+
+
+ADVANCED (for the population modelers) What would be the model if harvest occurred immediately before census? Three months after census? Continuously throughout the year?
+
+
+Assume the harvest ($H_t$) is and the number of family groups ($y_t$) are observed without error. Harvest is closely regulated and all hunters who harvest a lynx are required by law to register the animal with the county. You are entitled to make the assumption that family groups are observed without error because your Scandinavian colleagues are amazing snow trackers and do a good job of estimating the number of family groups (if not the number of lynx) in a management region. The challenge in this problem is that the observations of lynx abundance (family groups) are not the same as the observation of harvest (number of lynx). Fortunately, you have prior information, hard won from radio-telemetry, on the proportional relationship between number of family groups and number of lynx in the population, i.e:
+
+$$\begin{aligned}
+\phi=f/N
+\end{aligned}$$,
+
+
+where $f$ is the number of family groups and $N$ is the population size, mean $\phi=0.163$ with standard deviation of the mean = 0.012.
+
+
+&nbsp;
+
+
+## R libraries needed for this lab
+
+
+&nbsp;
+
+
+You need to load the following libraries. Set the seed to 10 to compare your answers to ours. The data for this problem is located in the LynxFamilies data frame of the BayesNSF package.
+
+```{r, echo=TRUE, eval=FALSE}
+library(BayesNSF) 
+library(rjags)
+library(MCMCvis)
+library(HDInterval)
+set.seed(10)
+```
+
+
+&nbsp;
+
+
+## Generating an Informed Prior for $\phi$
+
+
+&nbsp;
+
+
+We’ve provided you with a useful moment matching function below for converting the mean and standard deviation of $\phi$ to the parameters for the beta distribution you will use as an informed prior on $\phi$.
+
+```{r, echo=TRUE}
+# Function to get beta shape parameters from moments
+shape_from_stats <- function(mu = mu.global, sigma = sigma.global) {
+  a <-(mu^2 - mu^3 - mu * sigma^2) / sigma^2
+  b <- (mu - 2 * mu^2 + mu^3 - sigma^2 + mu*sigma^2) / sigma^2
+  shape_ps <- c(a, b)
+  return(shape_ps)
+}
+
+# get parameters for distribution of population multiplier, 1/p
+shapes = shape_from_stats(.163, .012)
+
+# check prior on p using simulated data from beta distribution
+x = seq(0, 1, .001)
+p = dbeta(x, shapes[1], shapes[2])
+plot(x, p, typ = "l", xlim = c(0, 1))
+```
+
+
+&nbsp;
+
+
+## Diagram the Bayesian network
+
+
+&nbsp;
+
+
+1. Develop a hierarchical Bayesian model (also called a state space model) of the lynx population in the management unit. Diagram the Bayesian network (the DAG) of knowns and unknowns and write out the posterior and factored joint distribution. Use a lognormal distribution to model the true lynx population size over time. Use a Poisson distribution for the data model relating the true, unobserved state (the total population size) to the observed data (number of family groups).
+
+
+```{r, fig.align = 'center'}
+DiagrammeR::grViz("
+      digraph mrdag {
+      graph [rankdir=TB, layout=neato]
+ 
+      node [shape=plaintext, height=0.3, width=0.3]
+      Y     [label=<<I>Y@_{t}</I>>, pos='3,1!']
+      
+      N     [label=<<I>N@_{t}</I>>, pos='2,0!']
+      
+      phi   [label='&phi;', pos='4,-2!']
+      
+      H     [label=<<I>H@_{t-1}</I>>, pos='3,-1!']
+      
+      lambda    [label='&lambda;', pos='2,-1!']
+      
+      sigma    [label='<I>&sigma;@_{p}@^{2}</I>', pos='1,-1!']
+      
+      Nt1     [label=<<I>N@_{t-1}</I>>, pos='0,-1!']
+      
+      N1     [label=<<I>N@_{1}</I>>, pos='-0,-2!']
+      
+      y1     [label=<<I>Y@_{1}</I>>, pos='-0,-3!']
+      
+      edge [arrowhead='vee']
+      N -> Y
+      phi -> Y
+      sigma -> N
+      lambda -> N
+      Nt1 -> N
+      
+      H -> N      [style=dashed];
+      N1 -> Nt1  [style=dotted];
+      phi -> N1 [style=dashed];
+      sigma -> N1 [style=dashed];
+      y1 -> N1 [style=dashed];
+      }
+      ", height = 190)
+```
+
+$$\begin{align*}
+
+[\pmb{N}, \lambda, \sigma^2_p, \phi \mid \pmb{y}] &\propto \prod_{i=2}^{n} [y_t \mid N_t, \phi][N_t \mid g(N_{t-1}, H_{t-1}, \lambda), \sigma^2_p] [N_1 \mid g(y_1, \phi), \sigma^2_p] [\lambda] [\sigma^2_p] [\phi] \\ 
+
+
+y_{t} &\sim \text{Poisson}(N_{t} \phi)\\
+
+N_t &\sim \text{lognormal}(log(\lambda(N_{t-1}-H_{t-1})), \sigma^2_p)\\
+
+N_1 &\sim \text{lognormal} \bigg( log \bigg( \frac{y_{i}}{\phi} \bigg), \sigma^2_p \bigg)\\
+ 
+\lambda &\sim \text{uniform}(0,100)\\
+
+\sigma^2_p &\sim \text{gamma} (0.5, 0.001)\\
+
+\phi &\sim \text{beta}(154, 792)
+
+\end{align*}$$
+
+&nbsp;
+
+
+2. An alternative approach, which is slightly more difficult to code, is to model the process as:
+
+
+$$\begin{aligned}
+\textrm{negative binomial}(N_t\mid\lambda(N_{t-1}-H_{t-1}, \rho))
+\end{aligned}$$, 
+
+and model the data as: 
+
+$$\begin{aligned}
+\textrm{binomial}(y_t\mid \textrm{round}(N_t\phi), p)
+\end{aligned}$$,
+
+where $p$ is a detection probability. Explain why this second formulation might be better than the formulation you are using. (It turns out they give virtually identical results.)
+
+
+**ANSWER**
+The advantage of modeling the data using binomial distribution is that we are able to incorporate detection probability (so we can accounts for missed detentions - false negative). Though in the event of double-counting, poisson distribution may be more appropriate.
+
+The advantage of modeling the process using negative binomial distribution is that we are able to model population as a discrete variable rather than a continuous variable in lognormal distribution. This may have some advantages when the population is small. 
+
+
+&nbsp;
+
+
+## Fitting the Model
+
+
+&nbsp;
+
+
+Now you’ll estimate the marginal posterior distribution of the unobserved, true state over time (**N**), the parameters in the model $\lambda$ and $\phi$ as well as the process variance and observation variance. You’ll also summarize the marginal posterior distributions of the parameters and unobserved states. A note about the data. Each row in the data file gives the observed number of family groups for that year in column 2 and that year’s harvest in column 3. The harvest in each row influences the population size in the next row. So, for example, the 2016 harvest influences the 2017 population size.
+
+Before you begin it’s very helpful to use simulated data to the verify initial values and model. We simulate the true state by choosing some biologically reasonable values for model parameters and “eyeballing” the fit of the true state to the data. You can then use these simulated values for initial conditions (see the inits list below). This is of particular importance because failing to give reasonable initial conditions for dynamic models can cause problems in model fitting. Remember, supply initial conditions for *all* unobserved quantities in the posterior distribution (even those that do not have priors).
+
+
+&nbsp;
+
+
+```{r, echo=TRUE}
+y <- LynxFamilies
+endyr <- nrow(y)
+n <- numeric(endyr + 1)
+mu <- numeric(endyr + 1)
+fg <- numeric(endyr + 1)
+phi <- 0.16
+lambda <- 1.07
+sigma.p <- 0.2
+ 
+n[1] <- y$census[1] / phi # n in the unit of individuals
+mu[1] <- n[1] # mean from deterministic model to simulate
+fg[1] <- n[1] * phi # Nt in the unit of
+ 
+for (t in 2:(endyr + 1)) {
+  mu[t] <- lambda * (n[t - 1] - y$harvest[t - 1])
+  n[t] <- rlnorm(1, log(mu[t]), sigma.p)
+  fg[t] <- n[t] * phi
+}
+
+plot(y$year, y$census, ylim = c(0, 100), xlab = "Year", ylab = "Family group", 
+     main = "Simulated data")
+lines(y$year, fg[1:length(y$year)])
+```
+
+
+&nbsp;
+
+
+```{r, echo=TRUE}
+## visually match simulated data with observations for initial conditions
+endyr = nrow(y)
+n = numeric(endyr + 1)
+mu = numeric(endyr + 1) #use this for family groups
+lambda = 1.1
+sigma.p = .00001
+n[1] = y$census[1]
+
+for(t in 2:(endyr + 1)) {
+  n[t] <- lambda * (y$census[t - 1] - .16 * y$harvest[t - 1])  # use this for family groups
+}
+
+plot(y$year, y$census, ylim = c(0, 100), xlab = "Year", ylab = "Family group", 
+     main = "Simulated data")
+lines(y$year, n[1:length(y$year)])
+```
+
+
+&nbsp;
+
+
+Here's your starting code:
+
+
+&nbsp;
+
+
+```{r, echo=TRUE}
+data = list(
+    y.endyr = endyr,
+    y.a = shapes[1], 
+    y.b = shapes[2],
+    y.H = y$harvest,
+    y = y$census)
+
+inits = list(
+    list(lambda = 1.2, sigma.p = .01, N = n),
+    list(lambda = 1.01,sigma.p = .2, N = n * 1.2),
+    list(lambda = .95, sigma.p = .5, N = n * .5))
+```
+
+
+&nbsp;
+
+
+1. Write the JAGS model to estimate the marginal posterior distribution of the unobserved, true state over time (\bf{N}), the parameters in the model $\lambda$ and $\phi$ as well as the process variance and observation variance. Include a summary the marginal posterior distributions of the parameters and unobserved states.
+
+
+&nbsp;
+
+
+```{r, echo=TRUE}
+{
+sink("lynxmodel.R") 
+cat("
+model{
+
+
+# Priors
+
+phi ~ dbeta(y.a, y.b) 
+lambda ~ dgamma(.5, .001)
+sigma.p ~ dunif(0,100) 
+tau.p <- 1/sigma.p^2  
+fg[1] ~ dpois(y[1])
+N[1] ~ dlnorm(log(y[1] / phi), tau.p)
+
+
+# Likelihood
+
+for(t in 2:y.endyr){
+# Data 
+  y[t] ~ dpois(phi * N[t]) 
+}
+
+
+# Process 
+
+for(t in 2:(y.endyr+1)){
+  log.mu[t] <- log(max(0.0001,lambda * (N[t-1] - y.H[t-1]))) 
+  N[t] ~ dlnorm(log.mu[t], tau.p) 
+  fg[t] <- N[t] * phi
+}
+
+
+# Bayesian p values
+
+ for(t in 1:y.endyr){
+  y.sim[t] ~ dpois(phi * N[t]) 
+  sq.data[t] <- (y[t] - (phi*N[t]))^2
+  sq.sim[t] <- (y.sim[t] - (phi*N[t]))^2
+ }
+
+# Predictive check for discrepancy
+ dis.data <- sum(sq.data)
+ dis.sim <- sum(sq.sim)
+ p.dis <- step(dis.sim - dis.data)    # calcualte Bayesian test statistic
+
+# Derived quantity to examine autocorrelation in residuals
+  for(t in 2:y.endyr){
+   e[t] <- y[t] - N[t]
+   }
+
+    }
+      ", fill = TRUE)
+  sink()
+}
+```
+
+```{r}
+# Setup MCMC chain
+n.adapt = 3000
+n.update = 10000
+n.iter = 10000
+
+jm = jags.model("lynxmodel.R",
+                data = data, inits = inits, n.chains = length(inits), n.adapt = n.adapt)
+update(jm, n.iter = n.update)
+
+zm = coda.samples(jm, variable.names = c("lambda", "phi", "sigma.p", "N", "p.dis", "e"), 
+                  n.iter = n.iter, n.thin = 1)
+```
+
+
+&nbsp;
+
+
+2. Check MCMC chains for model parameters, process variance, and latent states for convergence. This will probably require using the excl option in MCMCsummary.
+
+
+&nbsp;
+
+
+```{r, fig.ncol=1,fig.height=3, fig.width=3}
+MCMCsummary(zm, round = 4, n.eff = TRUE)
+```
+
+&nbsp;
+
+```{r, fig.ncol=1,fig.height=3, fig.width=3}
+# caterpillar plot
+MCMCplot(zm, params=c("lambda","phi", "sigma.p", "p.dis"))
+
+# trace plots
+MCMCtrace(zm, params = 'phi', type = 'trace', pdf = FALSE) 
+```
+
+```{r, fig.ncol=1,fig.height=3, fig.width=3}
+MCMCtrace(zm, params = 'lambda', type = 'trace', pdf = FALSE)
+MCMCtrace(zm, params = 'sigma.p', type = 'trace', pdf = FALSE)
+```
+
+```{r, fig.ncol=1,fig.height=3, fig.width=3}
+MCMCtrace(zm, params = 'p.dis', type = 'trace', pdf = FALSE) 
+```
+
+
+&nbsp;
+
+
+3. Conduct posterior predictive checks by simulating a new dataset for family groups ($f_t$) at every MCMC iteration. Calculate a Bayesian p value using the sums of squared discrepancy between the observed and the predicted number of family groups based on observed and simulated data,
+
+$$\begin{aligned}
+T^{observed}=\sum_{t=1}^{n}(f^{observed}_t-N_t\phi)^2
+\end{aligned}$$
+
+
+$$\begin{aligned}
+T^{model}=\sum_{t=1}^{n}(f^{simulated}_t-N_t\phi)^2
+\end{aligned}$$.
+
+The Bayesian p value is the proportion of MCMC iterations for which $T_{model}>T_{obs}$.
+
+Assure yourself that the process model adequately accounts for temporal autocorrelation in the residuals— allowing the assumption that they are independent and identically distributed. To do this, include a derived quantity
+
+$$\begin{aligned}e_t=y_t-N_t\phi
+\end{aligned}$$,
+
+in your JAGS code and coda object. Use the following code or something like it to examine how autocorrelation in the residuals changes with time lag.
+
+
+```{r, fig.align = 'center'}
+acf(unlist(MCMCpstr(zm, param = "e", func = mean)), main = "", lwd = 3, ci = 0)
+```
+
+
+
+&nbsp;
+
+
+4. Write a paragraph describing how to interpret the plot produced by this function.
+
+
+**ANSWER**
+ACF (empirical autocorrelation function) plot shows the temporal correlation, the correlations between points separated by a lag of two time stamps. ACF value ($\rho_g$) varies between -1 to 1. The higher the absolute value of ACF is, the higher degree of autocorrelation two times have. We would say the residuals are not correlated if the ACF values drop down close to 0 very fast (when lag increases just a little bit), and then remains close to 0 and just goes up and down from 0. This plot shows us that there is no autocorrelation in the residuals. 
+
+&nbsp;
+
+
+5. Plot the median of the marginal posterior distribution of the number of lynx family groups over time (1998-2016) including a highest posterior density interval. Include your forecast for 2017 (the predictive process distribution) in this plot.
+
+
+```{r} 
+zm1 <- coda.samples(jm, variable.names = c("N","fg"), n.iter = n.iter, n.thin = 1)
+bound <- MCMCpstr(zm1, params = 'fg', func = function(x) hdi(x,0.95))
+
+years <- seq(1998,2017,1)
+plot(y$year, y$census, ylab = "Number of Lynx Family Groups ", xlab = "Years", 
+     xlim = c(1998,2017), ylim = c(0,100))
+lines(years, MCMCpstr(zm1, params = 'fg', func = median)$fg, col="red", lwd = 2)
+lines(bound$fg[,1] ~ years, lty=2)
+lines(bound$fg[,2] ~ years, lty=2)
+abline(h=26, lty=3)
+abline(h=32, lty=3)
+```
+
+
+&nbsp;
+
+# Code
+
+```{r ref.label = knitr::all_labels(), echo = TRUE, eval = FALSE}
+# this R markdown chunk generates a code appendix
+```
+
